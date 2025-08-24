@@ -91,11 +91,5 @@ if uploaded_file is not None:
     👉 **Suggested Next Production**: `{suggested_next_production}` units
     ''')
 
-    # Optional Notes
-    with st.expander("ℹ️ Notes"):
-        st.write("- Linear Regression now uses current month as an extra feature for seasonality.")
-        st.write("- Predicted production includes a 10% safety buffer.")
-        st.write("- Recommendation shows % increase/decrease compared to last month production.")
-
 else:
     st.info("Waiting for CSV upload. You can try with the provided `sample_data.csv`.")
