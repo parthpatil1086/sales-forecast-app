@@ -1,63 +1,101 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from sklearn.linear_model import LinearRegression
 import joblib
-import os
+from datetime import datetime
 
-st.set_page_config(page_title="Sales Forecast & Production Suggestion")
-
+st.set_page_config(page_title="Sales Forecast & Production Suggestion", page_icon="📈", layout="centered")
 st.title("📈 Sales Forecast & 🏭 Production Recommendation Tool")
+st.caption("Upload your CSV → train model → forecast next 2 months → get production suggestion.")
 
-# Upload CSV
-uploaded_file = st.file_uploader("📤 Upload CSV (with sales & production data)", type=["csv"])
+req_cols = {"product", "last_month_sales", "this_month_sales", "last_month_production"}
+
+# --- CSV Upload ---
+uploaded_file = st.file_uploader("📤 Upload CSV (must include product & the 3 numeric columns)", type=["csv"])
 
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
-    st.write("### 📊 Uploaded Data", df)
+    st.subheader("📊 Uploaded Data")
+    st.dataframe(df, use_container_width=True)
 
-    if {"last_month_sales", "this_month_sales"}.issubset(df.columns):
-        # Train model
-        X = df[["last_month_sales"]]
-        y = df["this_month_sales"]
-        model = LinearRegression()
-        model.fit(X, y)
-        joblib.dump(model, "model.pkl")
-        st.success("✅ Model trained successfully!")
+    # Validate columns
+    if not req_cols.issubset(df.columns):
+        st.error("❌ CSV must have columns: 'product', 'last_month_sales', 'this_month_sales', 'last_month_production'")
+        st.stop()
 
-        # Product selection
-        product_list = df["product"].unique()
-        selected_product = st.selectbox("🔍 Select Product", product_list)
+    # Ensure numeric types
+    for col in ["last_month_sales", "this_month_sales", "last_month_production"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    clean = df.dropna(subset=["last_month_sales", "this_month_sales", "last_month_production"]).copy()
+    if clean.empty:
+        st.error("❌ After cleaning, no valid numeric rows remain.")
+        st.stop()
 
-        row = df[df["product"] == selected_product].iloc[-1]
-        last_sales = row["last_month_sales"]
-        this_sales = row["this_month_sales"]
-        last_prod = row["last_month_production"]
+    # --- Add seasonality / month feature ---
+    current_month = datetime.now().month
+    clean["month"] = current_month
 
-        # Load and predict
-        model = joblib.load("model.pkl")
-        month1_pred = model.predict([[this_sales]])[0]
-        month2_pred = model.predict([[month1_pred]])[0]
+    # Train Linear Regression with month as additional feature
+    X = clean[["last_month_sales", "month"]].values
+    y = clean["this_month_sales"].values
+    model = LinearRegression()
+    model.fit(X, y)
+    joblib.dump(model, "model.pkl")
+    st.success("✅ Model trained successfully with seasonality feature.")
 
-        # Recommendation
-        if this_sales > last_sales:
-            reco = "🔼 Increase Production"
-        elif this_sales < last_sales:
-            reco = "🔽 Decrease Production"
-        else:
-            reco = "⚖️ Maintain Production"
+    # Product selector
+    product_list = clean["product"].astype(str).unique().tolist()
+    selected_product = st.selectbox("🔍 Select Product", product_list)
+    prow = clean[clean["product"].astype(str) == selected_product].tail(1).iloc[0]
 
-        st.markdown(f"""
-        ### 🧾 Product: `{selected_product}`
+    last_sales = float(prow["last_month_sales"])
+    this_sales = float(prow["this_month_sales"])
+    last_prod  = float(prow["last_month_production"])
 
-        - 🧮 **Last Month Sales**: {last_sales}
-        - 📦 **This Month Sales**: {this_sales}
-        - 🏗️ **Last Month Production**: {last_prod}
+    # Predict next 2 months autoregressively
+    month1_pred = float(model.predict(np.array([[this_sales, current_month]]))[0])
+    month2_pred = float(model.predict(np.array([[month1_pred, current_month]]))[0])
 
-        ### 🔮 Predicted Sales:
-        - 📅 Next Month: **{month1_pred:.2f}**
-        - 📅 Month After: **{month2_pred:.2f}**
+    # --- Safety buffer & suggested production ---
+    safety_factor = 1.1  # 10% buffer
+    suggested_next_production = max(0, round(month1_pred * safety_factor))
 
-        ### ✅ Recommendation: {reco}
-        """)
+    # --- % change recommendation ---
+    if last_prod == 0:
+        perc_change = 100
     else:
-        st.error("❌ CSV must have 'last_month_sales', 'this_month_sales', 'last_month_production'")
+        perc_change = ((suggested_next_production - last_prod) / last_prod) * 100
+
+    if perc_change > 5:
+        reco = f"🔼 Increase Production by {perc_change:.1f}%"
+    elif perc_change < -5:
+        reco = f"🔽 Decrease Production by {abs(perc_change):.1f}%"
+    else:
+        reco = f"⚖️ Maintain Production (~{perc_change:.1f}%)"
+
+    # Display results
+    st.markdown(f'''
+    ### 🧾 Product: `{selected_product}`
+
+    - 🧮 **Last Month Sales**: `{last_sales:.0f}`
+    - 📦 **This Month Sales**: `{this_sales:.0f}`
+    - 🏗️ **Last Month Production**: `{last_prod:.0f}`
+
+    ### 🔮 Predicted Sales
+    - 📅 **Next Month**: `{month1_pred:.2f}`
+    - 📅 **Month After**: `{month2_pred:.2f}`
+
+    ### ✅ Recommendation
+    {reco}  
+    👉 **Suggested Next Production**: `{suggested_next_production}` units
+    ''')
+
+    # Optional Notes
+    with st.expander("ℹ️ Notes"):
+        st.write("- Linear Regression now uses current month as an extra feature for seasonality.")
+        st.write("- Predicted production includes a 10% safety buffer.")
+        st.write("- Recommendation shows % increase/decrease compared to last month production.")
+
+else:
+    st.info("Waiting for CSV upload. You can try with the provided `sample_data.csv`.")
