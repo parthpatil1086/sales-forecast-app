@@ -92,4 +92,4 @@ if uploaded_file is not None:
     ''')
 
 else:
-    st.info("Waiting for CSV upload. You can try with the provided `sample_data.csv`.")
+    st.info("Waiting for CSV upload.")
